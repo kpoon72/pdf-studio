@@ -35,7 +35,10 @@ After installing, **open Docker Desktop** and wait for the whale icon in the men
 
 ### Step 2 — Get the project
 
-If you have the folder already, skip this. Otherwise clone or copy the project to your machine.
+```bash
+git clone https://github.com/kpoon72/pdf-studio.git
+cd pdf-studio
+```
 
 ### Step 3 — Run it
 
