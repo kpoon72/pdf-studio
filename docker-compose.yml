@@ -1,0 +1,46 @@
+services:
+  # ── Backend API ─────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pdf-studio-backend
+    restart: unless-stopped
+    environment:
+      PORT: 3001
+      FRONTEND_URL: http://localhost
+      NODE_ENV: production
+    volumes:
+      # Persist uploaded files across restarts
+      - pdf_uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - pdf-network
+
+  # ── Frontend (nginx) ────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: pdf-studio-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - pdf-network
+
+volumes:
+  pdf_uploads:
+    driver: local
+
+networks:
+  pdf-network:
+    driver: bridge
