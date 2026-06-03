@@ -19,7 +19,7 @@ const Layout: React.FC = () => {
         </main>
         <footer className="flex-shrink-0 border-t border-gray-200 dark:border-gray-800 px-6 py-2.5 bg-white dark:bg-gray-900">
           <p className="text-xs text-center text-gray-400 dark:text-gray-600">
-            © {new Date().getFullYear()} KP. All rights reserved.
+            © {new Date().getFullYear()} KPoon. All rights reserved.
           </p>
         </footer>
       </div>
