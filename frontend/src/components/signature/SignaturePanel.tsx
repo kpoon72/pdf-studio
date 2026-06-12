@@ -1,8 +1,27 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { Trash2, Check, Download, Upload, PenTool } from 'lucide-react';
+import { Trash2, Check, Upload, PenTool, Type } from 'lucide-react';
 import Button from '../common/Button';
 import type { Signature } from '../../types';
 import clsx from 'clsx';
+
+const TYPE_FONTS = [
+  { family: 'Dancing Script', label: 'Classic' },
+  { family: 'Great Vibes', label: 'Elegant' },
+  { family: 'Pacifico', label: 'Casual' },
+  { family: 'Pinyon Script', label: 'Formal' },
+  { family: 'Sacramento', label: 'Delicate' },
+];
+
+const FONTS_URL =
+  'https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600&family=Great+Vibes&family=Pacifico&family=Pinyon+Script&family=Sacramento&display=swap';
+
+function ensureFontsLoaded() {
+  if (document.querySelector(`link[href="${FONTS_URL}"]`)) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = FONTS_URL;
+  document.head.appendChild(link);
+}
 
 interface SignaturePanelProps {
   signatures: Signature[];
@@ -12,13 +31,24 @@ interface SignaturePanelProps {
   selectedId?: string;
 }
 
-const SignaturePanel: React.FC<SignaturePanelProps> = ({ signatures, onSave, onRemove, onSelect, selectedId }) => {
+const SignaturePanel: React.FC<SignaturePanelProps> = ({
+  signatures, onSave, onRemove, onSelect, selectedId,
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [hasStrokes, setHasStrokes] = useState(false);
   const [signatureName, setSignatureName] = useState('My Signature');
-  const [mode, setMode] = useState<'draw' | 'upload'>('draw');
+  const [mode, setMode] = useState<'draw' | 'type' | 'upload'>('draw');
   const lastPos = useRef<{ x: number; y: number } | null>(null);
+
+  // Type mode
+  const [typedName, setTypedName] = useState('');
+  const [selectedFont, setSelectedFont] = useState(TYPE_FONTS[0].family);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => { ensureFontsLoaded(); }, []);
+
+  // ── Draw mode ────────────────────────────────────────────────────────────
 
   const initCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -35,12 +65,9 @@ const SignaturePanel: React.FC<SignaturePanelProps> = ({ signatures, onSave, onR
 
   useEffect(() => { initCanvas(); }, [initCanvas]);
 
-  const getPos = (e: React.PointerEvent | React.MouseEvent) => {
+  const getPos = (e: React.PointerEvent) => {
     const rect = canvasRef.current!.getBoundingClientRect();
-    if ('pressure' in e) {
-      return { x: (e as React.PointerEvent).clientX - rect.left, y: (e as React.PointerEvent).clientY - rect.top };
-    }
-    return { x: (e as React.MouseEvent).clientX - rect.left, y: (e as React.MouseEvent).clientY - rect.top };
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   };
 
   const startDraw = (e: React.PointerEvent) => {
@@ -65,59 +92,100 @@ const SignaturePanel: React.FC<SignaturePanelProps> = ({ signatures, onSave, onR
 
   const endDraw = () => { setIsDrawing(false); lastPos.current = null; };
 
-  const clearCanvas = () => { initCanvas(); };
-
-  const saveSignature = () => {
-    const canvas = canvasRef.current!;
-    const dataUrl = canvas.toDataURL('image/png');
-    const sig: Signature = {
-      id: `sig-${Date.now()}`,
-      name: signatureName || 'Signature',
-      dataUrl,
-      createdAt: new Date().toISOString(),
-    };
-    onSave(sig);
-    clearCanvas();
+  const saveDrawnSignature = () => {
+    const dataUrl = canvasRef.current!.toDataURL('image/png');
+    onSave({ id: `sig-${Date.now()}`, name: signatureName || 'Signature', dataUrl, createdAt: new Date().toISOString() });
+    initCanvas();
   };
+
+  // ── Type mode ────────────────────────────────────────────────────────────
+
+  const saveTypedSignature = async () => {
+    if (!typedName.trim()) return;
+    setIsSaving(true);
+    try {
+      await document.fonts.load(`80px '${selectedFont}'`);
+
+      const offscreen = document.createElement('canvas');
+      const ctx = offscreen.getContext('2d')!;
+
+      const fontSize = 80;
+      ctx.font = `${fontSize}px '${selectedFont}'`;
+      const measured = ctx.measureText(typedName);
+
+      offscreen.width = Math.ceil(measured.width) + 60;
+      offscreen.height = Math.ceil(fontSize * 1.6);
+
+      // Canvas resize resets ctx state — re-apply everything
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, offscreen.width, offscreen.height);
+      ctx.fillStyle = '#1a1a2e';
+      ctx.font = `${fontSize}px '${selectedFont}'`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(typedName, offscreen.width / 2, offscreen.height / 2);
+
+      onSave({
+        id: `sig-${Date.now()}`,
+        name: typedName,
+        dataUrl: offscreen.toDataURL('image/png'),
+        createdAt: new Date().toISOString(),
+      });
+      setTypedName('');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // ── Upload mode ──────────────────────────────────────────────────────────
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
-      const dataUrl = ev.target?.result as string;
-      const sig: Signature = {
+    reader.onload = ev => {
+      onSave({
         id: `sig-${Date.now()}`,
         name: file.name.replace(/\.[^.]+$/, '') || 'Uploaded Signature',
-        dataUrl,
+        dataUrl: ev.target?.result as string,
         createdAt: new Date().toISOString(),
-      };
-      onSave(sig);
+      });
     };
     reader.readAsDataURL(file);
     e.target.value = '';
   };
 
+  // ── Render ───────────────────────────────────────────────────────────────
+
+  const MODES = [
+    { key: 'draw' as const, Icon: PenTool, label: 'Draw' },
+    { key: 'type' as const, Icon: Type, label: 'Type' },
+    { key: 'upload' as const, Icon: Upload, label: 'Upload' },
+  ];
+
   return (
     <div className="flex flex-col gap-6">
       {/* Mode tabs */}
       <div className="flex p-1 gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl">
-        {(['draw', 'upload'] as const).map(m => (
+        {MODES.map(({ key, Icon, label }) => (
           <button
-            key={m}
-            onClick={() => setMode(m)}
+            key={key}
+            onClick={() => setMode(key)}
             className={clsx(
-              'flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all',
-              mode === m ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700',
+              'flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-all',
+              mode === key
+                ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200',
             )}
           >
-            {m === 'draw' ? <PenTool className="w-4 h-4" /> : <Upload className="w-4 h-4" />}
-            {m === 'draw' ? 'Draw' : 'Upload Image'}
+            <Icon className="w-3.5 h-3.5" />
+            {label}
           </button>
         ))}
       </div>
 
-      {mode === 'draw' ? (
+      {/* ── Draw ── */}
+      {mode === 'draw' && (
         <div className="flex flex-col gap-3">
           <canvas
             ref={canvasRef}
@@ -131,7 +199,6 @@ const SignaturePanel: React.FC<SignaturePanelProps> = ({ signatures, onSave, onR
             style={{ touchAction: 'none' }}
           />
           <p className="text-xs text-center text-gray-400 dark:text-gray-600">Draw your signature above</p>
-
           <input
             type="text"
             value={signatureName}
@@ -139,17 +206,69 @@ const SignaturePanel: React.FC<SignaturePanelProps> = ({ signatures, onSave, onR
             placeholder="Signature label"
             className="px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500/50"
           />
-
           <div className="flex gap-2">
-            <Button variant="secondary" size="sm" onClick={clearCanvas} leftIcon={<Trash2 className="w-3.5 h-3.5" />}>
+            <Button variant="secondary" size="sm" onClick={initCanvas} leftIcon={<Trash2 className="w-3.5 h-3.5" />}>
               Clear
             </Button>
-            <Button variant="primary" size="sm" fullWidth disabled={!hasStrokes} onClick={saveSignature} leftIcon={<Check className="w-3.5 h-3.5" />}>
+            <Button variant="primary" size="sm" fullWidth disabled={!hasStrokes} onClick={saveDrawnSignature} leftIcon={<Check className="w-3.5 h-3.5" />}>
               Save Signature
             </Button>
           </div>
         </div>
-      ) : (
+      )}
+
+      {/* ── Type ── */}
+      {mode === 'type' && (
+        <div className="flex flex-col gap-4">
+          <input
+            type="text"
+            value={typedName}
+            onChange={e => setTypedName(e.target.value)}
+            placeholder="Type your name…"
+            className="px-3 py-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+          />
+
+          <div className="flex flex-col gap-2">
+            {TYPE_FONTS.map(font => (
+              <button
+                key={font.family}
+                onClick={() => setSelectedFont(font.family)}
+                className={clsx(
+                  'flex items-center justify-between px-4 py-2.5 rounded-xl border-2 transition-all text-left',
+                  selectedFont === font.family
+                    ? 'border-primary-400 bg-primary-50 dark:bg-primary-900/20'
+                    : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 bg-white dark:bg-gray-800/50',
+                )}
+              >
+                <span
+                  className="text-gray-800 dark:text-gray-100 leading-none"
+                  style={{ fontFamily: `'${font.family}', cursive`, fontSize: '26px' }}
+                >
+                  {typedName || 'Your Name'}
+                </span>
+                <span className="text-[11px] text-gray-400 dark:text-gray-500 ml-3 flex-shrink-0">
+                  {font.label}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <Button
+            variant="primary"
+            size="sm"
+            fullWidth
+            disabled={!typedName.trim() || isSaving}
+            loading={isSaving}
+            onClick={saveTypedSignature}
+            leftIcon={<Check className="w-3.5 h-3.5" />}
+          >
+            Save Signature
+          </Button>
+        </div>
+      )}
+
+      {/* ── Upload ── */}
+      {mode === 'upload' && (
         <label className="flex flex-col items-center justify-center gap-3 p-8 rounded-xl border-2 border-dashed border-gray-300 dark:border-gray-600 cursor-pointer hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/10 transition-colors">
           <Upload className="w-8 h-8 text-gray-400" />
           <span className="text-sm text-gray-500 dark:text-gray-400 text-center">
