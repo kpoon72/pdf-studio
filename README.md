@@ -136,6 +136,23 @@ npm run dev
 
 ---
 
+## Running on a Server Alongside Other Projects
+
+If this is deployed on a home server that also hosts other apps, port 80 will
+be taken by a shared reverse proxy (e.g. [Caddy](https://caddyserver.com/)).
+Use the server override to bind the frontend to a local-only port instead:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.server.yml up -d --build
+```
+
+This binds the frontend to `127.0.0.1:8081` instead of `0.0.0.0:80`, so it's
+only reachable through the reverse proxy, not directly from the network. Point
+a Caddy site block at `localhost:8081` (see the proxy's own Caddyfile for the
+pattern). Pick a different free port per project if running several.
+
+---
+
 ## Project Structure
 
 ```
