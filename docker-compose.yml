@@ -30,7 +30,7 @@ services:
     container_name: pdf-studio-frontend
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_PORT:-80}:80"
     depends_on:
       backend:
         condition: service_healthy

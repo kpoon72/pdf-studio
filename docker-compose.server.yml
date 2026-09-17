@@ -1,9 +1,0 @@
-# Override for running behind a shared reverse proxy (e.g. Caddy) on a
-# server that hosts multiple projects. Frees up host port 80 for the proxy.
-#
-# Usage:
-#   docker compose -f docker-compose.yml -f docker-compose.server.yml up -d --build
-services:
-  frontend:
-    ports:
-      - "127.0.0.1:8081:80"
