@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { ArrowLeftRight, FileType2, Image as ImageIcon, X, Upload } from 'lucide-react';
+import { ArrowLeftRight, FileType2, FileText, Image as ImageIcon, X, Upload } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as PDFJS from 'pdfjs-dist';
 import Button from '../components/common/Button';
@@ -7,8 +7,14 @@ import { downloadBlob, toPdfBlob, formatFileSize } from '../utils/pdfUtils';
 
 PDFJS.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
-type Tab = 'pdf-to-word' | 'image-to-pdf';
+type Tab = 'pdf-to-word' | 'image-to-pdf' | 'word-to-pdf';
 const ACCEPTED_IMAGES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/bmp'];
+const ACCEPTED_WORD = ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+
+// Letter page size in CSS px at 96 DPI
+const PAGE_W = 816;
+const PAGE_H = 1056;
+const PAGE_MARGIN = 48;
 
 const Convert: React.FC = () => {
   const [tab, setTab] = useState<Tab>('pdf-to-word');
@@ -23,6 +29,11 @@ const Convert: React.FC = () => {
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [imgDragOver, setImgDragOver] = useState(false);
   const imgInputRef = useRef<HTMLInputElement>(null);
+
+  // Word → PDF state
+  const [wordFile, setWordFile] = useState<File | null>(null);
+  const [wordDragOver, setWordDragOver] = useState(false);
+  const wordInputRef = useRef<HTMLInputElement>(null);
 
   const [converting, setConverting] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -50,6 +61,16 @@ const Convert: React.FC = () => {
     const files = Array.from(e.dataTransfer.files).filter(f => ACCEPTED_IMAGES.includes(f.type));
     if (files.length) setImageFiles(prev => [...prev, ...files]);
     else toast.error('Supported formats: JPG, PNG, WebP, GIF, BMP');
+  }, []);
+
+  const handleWordDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setWordDragOver(false);
+    const file = Array.from(e.dataTransfer.files).find(
+      f => ACCEPTED_WORD.includes(f.type) || f.name.toLowerCase().endsWith('.docx'),
+    );
+    if (file) setWordFile(file);
+    else toast.error('Please drop a .docx file');
   }, []);
 
   // ── PDF → Word ─────────────────────────────────────────────────────────────
@@ -174,10 +195,102 @@ const Convert: React.FC = () => {
     }
   };
 
+  // ── Word → PDF ─────────────────────────────────────────────────────────────
+
+  const convertWordToPdf = async () => {
+    if (!wordFile) return;
+    setConverting(true);
+    setProgress(0);
+    const toastId = toast.loading('Converting Word to PDF…');
+    let container: HTMLDivElement | null = null;
+    try {
+      const [{ convertToHtml }, html2canvas, { PDFDocument }] = await Promise.all([
+        import('mammoth'),
+        import('html2canvas').then(m => m.default),
+        import('pdf-lib'),
+      ]);
+      setProgress(15);
+
+      const arrayBuffer = await wordFile.arrayBuffer();
+      const { value: html } = await convertToHtml({ arrayBuffer });
+      setProgress(30);
+
+      const contentW = PAGE_W - PAGE_MARGIN * 2;
+      container = document.createElement('div');
+      container.style.position = 'fixed';
+      container.style.left = '-99999px';
+      container.style.top = '0';
+      container.style.width = `${contentW}px`;
+      container.style.fontFamily = 'Georgia, "Times New Roman", serif';
+      container.style.fontSize = '15px';
+      container.style.lineHeight = '1.6';
+      container.style.color = '#111827';
+      container.style.background = '#ffffff';
+      container.innerHTML = html;
+      document.body.appendChild(container);
+
+      const fullCanvas = await html2canvas(container, {
+        width: contentW,
+        windowWidth: contentW,
+        scale: 2,
+        backgroundColor: '#ffffff',
+        useCORS: true,
+      });
+      document.body.removeChild(container);
+      container = null;
+      setProgress(60);
+
+      const pdf = await PDFDocument.create();
+      const renderScale = fullCanvas.width / contentW;
+      const pageSliceHeightPx = (PAGE_H - PAGE_MARGIN * 2) * renderScale;
+      const totalPages = Math.max(1, Math.ceil(fullCanvas.height / pageSliceHeightPx));
+
+      for (let i = 0; i < totalPages; i++) {
+        setProgress(60 + Math.round(((i + 1) / totalPages) * 35));
+        const sliceHeight = Math.min(pageSliceHeightPx, fullCanvas.height - i * pageSliceHeightPx);
+
+        const sliceCanvas = document.createElement('canvas');
+        sliceCanvas.width = fullCanvas.width;
+        sliceCanvas.height = sliceHeight;
+        sliceCanvas.getContext('2d')!.drawImage(
+          fullCanvas,
+          0, i * pageSliceHeightPx, fullCanvas.width, sliceHeight,
+          0, 0, fullCanvas.width, sliceHeight,
+        );
+
+        const blob = await new Promise<Blob>(r => sliceCanvas.toBlob(b => r(b!), 'image/png'));
+        const embed = await pdf.embedPng(await blob.arrayBuffer());
+
+        const page = pdf.addPage([PAGE_W, PAGE_H]);
+        const drawWidth = contentW;
+        const drawHeight = drawWidth * (sliceHeight / fullCanvas.width);
+        page.drawImage(embed, {
+          x: PAGE_MARGIN,
+          y: PAGE_H - PAGE_MARGIN - drawHeight,
+          width: drawWidth,
+          height: drawHeight,
+        });
+      }
+
+      setProgress(97);
+      const bytes = await pdf.save();
+      downloadBlob(toPdfBlob(bytes), wordFile.name.replace(/\.docx?$/i, '') + '.pdf');
+      toast.success('Downloaded as PDF!', { id: toastId });
+    } catch (err) {
+      if (container) document.body.removeChild(container);
+      toast.error('Conversion failed', { id: toastId });
+      console.error(err);
+    } finally {
+      setConverting(false);
+      setProgress(0);
+    }
+  };
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   const TABS: { key: Tab; Icon: typeof ArrowLeftRight; label: string }[] = [
     { key: 'pdf-to-word', Icon: FileType2, label: 'PDF → Word' },
+    { key: 'word-to-pdf', Icon: FileText, label: 'Word → PDF' },
     { key: 'image-to-pdf', Icon: ImageIcon, label: 'Image → PDF' },
   ];
 
@@ -190,7 +303,7 @@ const Convert: React.FC = () => {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Convert</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400">PDF to Word · Images to PDF</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">PDF to Word · Word to PDF · Images to PDF</p>
         </div>
       </div>
 
@@ -286,6 +399,85 @@ const Convert: React.FC = () => {
             <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
               <strong>Note:</strong> Each PDF page is embedded as a high-quality image in the Word document.
               Text is not extracted — for editable text export, copy directly from the PDF viewer.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Word → PDF tab ── */}
+      {tab === 'word-to-pdf' && (
+        <div className="flex flex-col gap-6">
+          {/* Drop zone */}
+          <div
+            onDragOver={e => { e.preventDefault(); setWordDragOver(true); }}
+            onDragLeave={() => setWordDragOver(false)}
+            onDrop={handleWordDrop}
+            onClick={() => wordInputRef.current?.click()}
+            className={`flex flex-col items-center gap-3 py-16 px-6 rounded-2xl border-2 border-dashed cursor-pointer transition-all duration-200 ${
+              wordDragOver
+                ? 'border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 scale-[1.01]'
+                : 'border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/40 hover:border-emerald-300 hover:bg-emerald-50/50 dark:hover:bg-emerald-900/10'
+            }`}
+          >
+            <input
+              ref={wordInputRef}
+              type="file"
+              accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              className="hidden"
+              onChange={e => { if (e.target.files?.[0]) setWordFile(e.target.files[0]); e.target.value = ''; }}
+            />
+            <div className="w-14 h-14 rounded-2xl bg-emerald-100 dark:bg-emerald-900/40 flex items-center justify-center">
+              <FileText className="w-7 h-7 text-emerald-500" />
+            </div>
+            <div className="text-center">
+              <p className="font-semibold text-gray-700 dark:text-gray-300">Drop a Word document here</p>
+              <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">.docx only · or click to browse</p>
+            </div>
+          </div>
+
+          {/* Selected file */}
+          {wordFile && (
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50">
+              <FileText className="w-8 h-8 text-emerald-500 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{wordFile.name}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">{formatFileSize(wordFile.size)}</p>
+              </div>
+              <button
+                onClick={() => setWordFile(null)}
+                className="p-1.5 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-800/50 text-gray-400 hover:text-red-500 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Progress */}
+          {converting && progress > 0 && (
+            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-gradient-to-r from-emerald-500 to-teal-500 h-2 rounded-full transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          )}
+
+          <Button
+            variant="primary"
+            size="lg"
+            fullWidth
+            disabled={!wordFile || converting}
+            loading={converting}
+            onClick={convertWordToPdf}
+            className="!from-emerald-500 !to-teal-600 hover:!from-emerald-600 hover:!to-teal-700"
+          >
+            {converting ? `Converting… ${progress}%` : 'Convert to PDF'}
+          </Button>
+
+          <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50">
+            <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+              <strong>Note:</strong> Text, headings, lists, and images are preserved. Complex layouts,
+              headers/footers, and precise Word formatting may not carry over exactly.
             </p>
           </div>
         </div>
